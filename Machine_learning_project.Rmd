@@ -1,16 +1,21 @@
 ---
-title: "Machine_learning_project"
+title: "Machine Learning Project"
 author: "Jose Ignacio Gómez Marcelo"
-date: "30 July 2017"
+date: "31 July 2017"
 output:
   html_document:
     keep_md: true
 ---
 
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
 ## Overview
 This paper is the result of the Coursera Machine Learning course project and explains the steps that have been taken to adjust a classification model that allows predicting the quality of execution of weight lifting exercises.
 
-The objective is to predict, based on information about the movements performed during weight lifting exercises, that were collected with wereables devices, whether the exercise is being performed correctly (class A) or not (classes B, C, D and E)
+The objective is to predict, based on information about the movements performed during weight lifting exercises, that were collected with wereables devices, whether the exercise is being performed correctly (class A) or not (classes B, C, D and E).
 
 
 ## Software
@@ -18,13 +23,14 @@ This data analysis was carried out using R, a free software environment for stat
 ```{r sessioninfo}
 sessionInfo()
 ```
-Additionally, the packages `lattice`, `ggplot2`, `caret`, `foreach`, `randomForest`, `gbm`, `parallel`, `Iterators`, `doParallel`, `cowplot` and `gridExtra` were used.
+Additionally, the packages `lattice`, `ggplot2`, `caret`, `foreach`, `plyr`, `randomForest`, `gbm`, `parallel`, `Iterators`, `doParallel`, `cowplot` and `gridExtra` were used.
 
-```{r libraries}
+```{r libraries, message = FALSE}
 library(lattice)
 library(ggplot2)
 library(caret)
 library(foreach)
+library(plyr)
 library(randomForest)
 library(gbm)
 library(parallel)
@@ -34,7 +40,7 @@ library(cowplot)
 library(gridExtra)
 ```
 
-## Exploratory Analysis and cleaning
+## Exploratory Analysis and Cleaning
 First we download the training and testing datasets.
 
 ```{r downloadatasets}
@@ -46,7 +52,7 @@ testing <- read.csv(test_url)
 
 Let's take a look at the training dataset.
 
-```{r datasetstr}
+```{r datasetdim}
 dim(training)
 ```
 
@@ -59,7 +65,7 @@ str(training)
 There are a lot of numeric variables coded like factors. Let's
 convert all dependent variables to numeric.
 
-```{r convert_factors_to_numeric, warning = FALSE}
+```{r conv_to_num, warning = FALSE}
 training[,-c(1:7,160)] <- lapply(training[,-c(1:7,160)], function(x) as.numeric(as.character(x)))
 ```
 
@@ -73,30 +79,31 @@ There are 94 variables with approximately 98% of missing values (NAs) and 6 vari
 
 According to the terminology that Rubin coined to describe the different mechanisms of missing values, it seems that this is a case of Missing Completely at Random (MCAR). It means that the probability that an observation is missing is unrelated to the value of this observation or to the value of any other variables. Perhaps the Razor Inertial Measurement units (IMUs) used to record participants' movements had a problem with some specific movement. Hence the consistency in the frequency of values lost in some of the variables.
 
-Regardless of the method we are going to use to build a classifier, the proportion of missing values is too high to attempt any method of imputation, so we will eliminate those variables with more than 95% of missing values from the analysis.
+Regardless of the method we are going to use to build a classifier, the proportion of missing values is too high to attempt any method of imputation, so we will remove those variables with more than 95% of missing values from the analysis.
 
-We will also eliminate the variables referred to the time windows used to record data, since, at first glance, they do not seem to be relevant as predictors. We will also eliminate the variable that identifies the user, since we want that the classifier model can identify the quality of the exercise performed, regardless of the characteristics of a specific individual.
+We will also drop out the variables referred to the time windows used to record data, since, at first glance, they do not seem to be relevant as predictors. And we are also going to take out of the analysis the variable that identifies the user, since we want that the classifier model to be able to identify the quality of the exercise performed, regardless of the characteristics of a specific individual.
 
 ```{r select_features}
 feat_sec <- names(training[,-c(1:7,160)])[sapply(training[,-c(1:7,160)], function(x) sum(is.na(x))/length(x)) < 0.9]
 training <- training[, c(feat_sec, "classe")]
+dim(training)
 ```
 
-After this elimination process we have 52 predictor variables. Let's see if they all have enough variability.
+After this elimination process we have 52 predictor variables and the outcome `classe`. Let's see if they all have enough variability.
 
-```{r nearzero_select}
+```{r nearzero_check}
 nearZeroVar(training, saveMetrics = TRUE)
 ```
 
-There is no near zero variables, so we can construct the model with these dataset.
+There is no near zero variables, so we can build models with these dataset.
 
-Since we are going to use non-parametric models for the construction of our classifier, we will not test variables' skewness nor will we perform any transformation in them, such as centering and scaling them.
+Since we are going to use non-parametric models for the construction of our classifier, we will not test variables' skewness nor will we perform any transformation in them, such as centering or scaling them.
 
 ## Classifiers building
 
 In order to test our classifier on a new dataset, before applying it to `testing` dataset, we will split the `training` file into two parts: 90% will be used to train the models (`trainset`), and the remaining 10% to test them (`validset`).
 
-```{r splitting_dataset}
+```{r split_dataset}
 set.seed(42)
 train_index <- createDataPartition(y = training$classe, p = .9, list = FALSE)
 trainset <- training[train_index,]
@@ -109,7 +116,7 @@ y <- trainset[, 53]
 
 First we are going to train a model with Random Forest algorithm.
 
-```{r randomforest_model}
+```{r randomforest_model, cache = TRUE}
 cluster <- makeCluster(detectCores() - 1)
 registerDoParallel(cluster)
 trainfit <- trainControl(method = "cv", number = 5, allowParallel = TRUE)
@@ -117,16 +124,18 @@ set.seed(42)
 rf_model <- train(x, y, method="rf", trControl = trainfit)
 stopCluster(cluster)
 registerDoSEQ()
+rf_model$finalModel
 ```
 
-Let's test with the `validset' and plot the output.
+The Out Of Bag estimation of error rate in this model is 0.5%, a very good figure.
 
-```{r rf_model_mat_conf}
+Let's test the model with `validset` and plot the output of confussion matrix.
+
+```{r rf_model_mat_conf, echo = FALSE}
 rf_mat_conf <- confusionMatrix(predict(rf_model, validset), validset$classe)
 ```
 
-
-```{r plot_matrix_function}
+```{r plot_matrix_function, echo = FALSE}
 plot_mat_conf <- function(mat_conf, title) {
   confussion <- as.data.frame(mat_conf$table)
   confussion$categ <- ifelse(confussion$Freq > 100, "D", "R")
@@ -136,36 +145,39 @@ plot_mat_conf <- function(mat_conf, title) {
   colScale <- scale_colour_manual(name = "categ", values = myColors)
   
   # build plot confussion matrix
-  p1 <- ggplot(confussion, aes(x = Reference, y = Prediction, colour = categ)) + geom_point(shape = 15, cex = 28, colour = "black", show.legend = FALSE) + geom_point(shape = 15, cex = 27, show.legend = FALSE) + scale_x_discrete(name = "Reference", position = "top") + scale_y_discrete(name = "Prediction", limits = rev(levels(confussion$Prediction))) + geom_text(aes(label = sprintf("%1.0f", Freq)), cex = 4, col = "white") + coord_fixed(ratio = 1) + colScale + theme_bw()
+  p1 <- ggplot(confussion, aes(x = Reference, y = Prediction, colour = categ)) + geom_point(shape = 15, cex = 29, colour = "black", show.legend = FALSE) + geom_point(shape = 15, cex = 27, show.legend = FALSE) + scale_x_discrete(name = "Reference", position = "top") + scale_y_discrete(name = "Prediction", limits = rev(levels(confussion$Prediction))) + geom_text(aes(label = sprintf("%1.0f", Freq)), cex = 4, col = "white") + coord_fixed(ratio = 1) + colScale + theme_bw()
   
-  # build plot overall results
+  # build plot with overall results
   overall <- data.frame(t(round(mat_conf$overall, 4)))
-  mytheme <- ttheme_default(core = list(fg_params = list(cex = 1.0)), colhead = list(fg_params = list(cex = 0.8)), rowhead = list(fg_params = list(cex = 0)))
+  mytheme <- ttheme_default(core = list(fg_params = list(cex = 0.9)), colhead = list(fg_params = list(cex = 0.7)), rowhead = list(fg_params = list(cex = 0)))
   p2 <- tableGrob(overall, theme = mytheme)
   
-  # join all
-  p3 <- plot_grid(p1, p2, align = "v", ncol = 1, rel_heights = c(4, 1))
+  # add subtitle
+  p3 <- ggdraw() + draw_label("Confussion Matrix")
   
   # add title
   p4 <- ggdraw() + draw_label(title, fontface='bold')
   
-  # plot all
-  plot_grid(p4, p3, ncol = 1, rel_heights = c(0.1, 1))
+  # add space
+  p5 <- ggdraw() + draw_label("")
   
+  # plot all
+  plot_grid(p5, p4, p3, p1, p2, ncol = 1, rel_heights = c(0.2, 0.2, 0.2, 5, 1))
 }
 ```
 
-```{r plot_rf_model_conf}
-plot_conf_mat(rf_mat_conf, "Random Forest model")
+```{r plot_rf_model_conf, echo = FALSE, fig.align = 'center', fig.height = 9, fig.width = 7, fig.asp = 1}
+plot_mat_conf(rf_mat_conf, "Random Forest model")
 ```
 
-The precision of the model is very good (0.9959). In the movements referred to the class A (exercise done correctly) the model obtains a 100% of hits.
+The accuracy of the model is very good (0.9959). In the movements referred to the class A (exercise done correctly) the model obtains a 100% of hits.
 
 ### Stochastic Gradient Boosting with Trees 
 
-Now we use `gbm` to build another classificator.
+No we are going to train another classifier with `gbm` method, from `caret` package.
 
-```{r boosting_model}
+```{r boosting_model, cache = TRUE, message = FALSE}
+cluster <- makeCluster(detectCores() - 1)
 registerDoParallel(cluster)
 set.seed(42)
 gbm_model <- train(x, y, method="gbm", trControl = trainfit, verbose = FALSE)
@@ -173,16 +185,56 @@ stopCluster(cluster)
 registerDoSEQ()
 ```
 
-And we test in 'validset' too.
+And we also check its predictive efficacy in the data set `validset`.
 
-```{r gbm_model_mat_conf}
+```{r gbm_model_mat_conf, echo = FALSE}
 gbm_mat_conf <- confusionMatrix(predict(gbm_model, validset), validset$classe)
 ```
 
-```{r plot_gbm_model_conf}
-plot_conf_mat(gbm_conf_mat, "Stochastic Gradient Boosting model")
+```{r plot_gbm_model_conf, echo = FALSE, fig.align = 'center', fig.height = 9, fig.width = 7, fig.asp = 1}
+plot_mat_conf(gbm_mat_conf, "Stochastic Gradient Boosting model")
 ```
 
-The precision of this model is also very good (0.9959), but it is somewhat lower than that obtained by Random Forest, so we will use this last model to predict the classes of the test dataset.
+The precision of this model is also very good (0.9679), but it is somewhat lower than that obtained by Random Forest, so we will use this last model to predict the classes of the test dataset.
 
+## Testing phase
 
+Finally we will test the classification model trained with Random Forest in the `testing` dataset.
+
+```{r test_phase}
+pred_classes <- predict(rf_model, testing)
+pred_classes
+```
+
+## Appendix: function plot code
+
+```{r funct_plot_mat_conf}
+plot_mat_conf <- function(mat_conf, title) {
+  confussion <- as.data.frame(mat_conf$table)
+  confussion$categ <- ifelse(confussion$Freq > 100, "D", "R")
+  confussion$categ <- as.factor(confussion$categ)
+  myColors <- c("#3F97D0", "#F7AD50")
+  names(myColors) <- levels(confussion$categ)
+  colScale <- scale_colour_manual(name = "categ", values = myColors)
+  
+  # build plot confussion matrix
+  p1 <- ggplot(confussion, aes(x = Reference, y = Prediction, colour = categ)) + geom_point(shape = 15, cex = 29, colour = "black", show.legend = FALSE) + geom_point(shape = 15, cex = 27, show.legend = FALSE) + scale_x_discrete(name = "Reference", position = "top") + scale_y_discrete(name = "Prediction", limits = rev(levels(confussion$Prediction))) + geom_text(aes(label = sprintf("%1.0f", Freq)), cex = 4, col = "white") + coord_fixed(ratio = 1) + colScale + theme_bw()
+  
+  # build plot with overall results
+  overall <- data.frame(t(round(mat_conf$overall, 4)))
+  mytheme <- ttheme_default(core = list(fg_params = list(cex = 0.9)), colhead = list(fg_params = list(cex = 0.7)), rowhead = list(fg_params = list(cex = 0)))
+  p2 <- tableGrob(overall, theme = mytheme)
+  
+  # add subtitle
+  p3 <- ggdraw() + draw_label("Confussion Matrix")
+  
+  # add title
+  p4 <- ggdraw() + draw_label(title, fontface='bold')
+  
+  # add space
+  p5 <- ggdraw() + draw_label("")
+  
+  # plot all
+  plot_grid(p5, p4, p3, p1, p2, ncol = 1, rel_heights = c(0.2, 0.2, 0.2, 5, 1))
+}
+```
